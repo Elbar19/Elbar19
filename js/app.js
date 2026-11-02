@@ -33,7 +33,7 @@ $('styleGrid').addEventListener('click', (e) => {
   renderStyleCards();
 });
 
-try { $('apiKey').value = localStorage.getItem('anthropicKey') || ''; } catch { /* אחסון חסום */ }
+try { if ($('apiKey')) $('apiKey').value = localStorage.getItem('anthropicKey') || ''; } catch { /* אחסון חסום */ }
 
 // ---------- העלאת תמונה ----------
 async function setPhoto(file) {
@@ -52,7 +52,7 @@ dz.addEventListener('drop', (e) => {
   setPhoto(e.dataTransfer.files[0]);
 });
 
-$('printBtn').addEventListener('click', () => window.print());
+$('printBtn')?.addEventListener('click', () => window.print());
 
 // ---------- הפקת עיצוב ----------
 $('roomForm').addEventListener('submit', async (e) => {
@@ -140,8 +140,8 @@ function renderFloorplan(W, H, plan, openings, style) {
   const seg = (o, thick, color) => {
     const { wall, start, end } = o;
     const L = end - start;
-    if (wall === 'top') return `<rect x="${pad + start}" y="${pad - thick}" width="${L}" height="${thick}" fill="${color}"/>`;
-    if (wall === 'bottom') return `<rect x="${pad + start}" y="${pad + H}" width="${L}" height="${thick}" fill="${color}"/>`;
+    if (wall === 'top') return `<rect x="${pad + start}" y="${pad - thick}" width="${L}" height="${thick}" style="fill:${color}"/>`;
+    if (wall === 'bottom') return `<rect x="${pad + start}" y="${pad + H}" width="${L}" height="${thick}" style="fill:${color}"/>`;
     if (wall === 'left') return `<rect x="${pad - thick}" y="${pad + start}" width="${thick}" height="${L}" fill="${color}"/>`;
     return `<rect x="${pad + W}" y="${pad + start}" width="${thick}" height="${L}" fill="${color}"/>`;
   };
@@ -192,8 +192,8 @@ function renderFloorplan(W, H, plan, openings, style) {
   }).join('');
 
   const dims = `
-    <text x="${pad + W / 2}" y="${pad - 18}" text-anchor="middle" font-size="${fs}" fill="#555">${(W / 100).toFixed(2)} מ'</text>
-    <text x="${pad - 18}" y="${pad + H / 2}" text-anchor="middle" font-size="${fs}" fill="#555"
+    <text x="${pad + W / 2}" y="${pad - 18}" text-anchor="middle" font-size="${fs}" style="fill:var(--muted)">${(W / 100).toFixed(2)} מ'</text>
+    <text x="${pad - 18}" y="${pad + H / 2}" text-anchor="middle" font-size="${fs}" style="fill:var(--muted)"
       transform="rotate(-90 ${pad - 18} ${pad + H / 2})">${(H / 100).toFixed(2)} מ'</text>`;
 
   const svg = `
@@ -205,9 +205,9 @@ function renderFloorplan(W, H, plan, openings, style) {
       </pattern>
     </defs>
     <rect x="${pad}" y="${pad}" width="${W}" height="${H}" fill="url(#planks)"/>
-    <rect x="${pad - wallT / 2}" y="${pad - wallT / 2}" width="${W + wallT}" height="${H + wallT}" fill="none" stroke="#333" stroke-width="${wallT}"/>
+    <rect x="${pad - wallT / 2}" y="${pad - wallT / 2}" width="${W + wallT}" height="${H + wallT}" fill="none" style="stroke:var(--wall)" stroke-width="${wallT}"/>
     ${openings.window ? seg(openings.window, wallT + 2, '#9ED0F0') : ''}
-    ${seg({ ...d }, wallT + 2, '#fff')}
+    ${seg({ ...d }, wallT + 2, 'var(--panel)')}
     <path d="${arc}" fill="none" stroke="#999" stroke-width="2" stroke-dasharray="5 4"/>
     ${dims}
     ${itemSvg}
@@ -328,8 +328,8 @@ function renderTips(room, style, plan, photo, openings) {
 
 // ---------- Claude (אופציונלי) ----------
 async function maybeRunAi(room, style, roomDef) {
-  const key = $('apiKey').value.trim();
-  const use = $('useAi').checked;
+  const key = $('apiKey')?.value.trim() || '';
+  const use = !!$('useAi')?.checked;
   if (!use) { $('aiPanel').hidden = true; return; }
   $('aiPanel').hidden = false;
   if (!key) { $('aiContent').innerHTML = '<p class="err">כדי להשתמש בניתוח AI יש להזין מפתח API.</p>'; return; }
