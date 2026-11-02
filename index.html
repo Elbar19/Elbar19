@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>מעצב החדרים</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">🛋️ <span>מעצב החדרים</span></div>
+    <p class="tagline">מזינים מידות, מעלים תמונה, בוחרים סגנון — ומקבלים תוכנית עיצוב מלאה</p>
+  </header>
+
+  <main class="layout">
+    <!-- ===== טופס ===== -->
+    <form id="roomForm" class="panel form" autocomplete="off">
+      <h2>1. נתוני החדר</h2>
+
+      <label>סוג החדר
+        <select id="roomType" required></select>
+      </label>
+
+      <div class="grid3">
+        <label>אורך (מ')
+          <input id="length" type="number" min="1.5" max="20" step="0.1" value="4.5" required />
+        </label>
+        <label>רוחב (מ')
+          <input id="width" type="number" min="1.5" max="20" step="0.1" value="3.6" required />
+        </label>
+        <label>גובה (מ')
+          <input id="height" type="number" min="2" max="6" step="0.05" value="2.6" required />
+        </label>
+      </div>
+
+      <div class="grid2">
+        <label>קיר הדלת
+          <select id="doorWall">
+            <option value="bottom">תחתון</option>
+            <option value="top">עליון</option>
+            <option value="right">ימני</option>
+            <option value="left">שמאלי</option>
+          </select>
+        </label>
+        <label>קיר החלון
+          <select id="windowWall">
+            <option value="top">עליון</option>
+            <option value="bottom">תחתון</option>
+            <option value="right">ימני</option>
+            <option value="left">שמאלי</option>
+            <option value="none">אין חלון</option>
+          </select>
+        </label>
+      </div>
+
+      <h2>2. תמונת החדר</h2>
+      <label class="drop" id="dropZone">
+        <input id="photo" type="file" accept="image/*" hidden />
+        <span id="dropText">📷 לחצו או גררו לכאן תמונה של החדר</span>
+        <img id="photoPreview" alt="" hidden />
+      </label>
+
+      <h2>3. סגנון</h2>
+      <div id="styleGrid" class="style-grid" role="radiogroup" aria-label="סגנון עיצוב"></div>
+
+      <h2>4. תקציב</h2>
+      <div class="budget" role="radiogroup" aria-label="תקציב">
+        <label><input type="radio" name="budget" value="low" /> חסכוני</label>
+        <label><input type="radio" name="budget" value="mid" checked /> בינוני</label>
+        <label><input type="radio" name="budget" value="high" /> פרימיום</label>
+      </div>
+
+      <details class="ai">
+        <summary>🤖 ניתוח תמונה חכם עם Claude (אופציונלי)</summary>
+        <p class="muted">עם מפתח API של Anthropic, Claude יסתכל על התמונה עצמה ויתאים את ההמלצות לחדר האמיתי
+          (רהיטים קיימים, תאורה, חומרים). המפתח נשמר רק בדפדפן שלכם.</p>
+        <label>מפתח API
+          <input id="apiKey" type="password" placeholder="sk-ant-..." />
+        </label>
+        <label class="inline"><input id="useAi" type="checkbox" /> השתמש בניתוח AI</label>
+      </details>
+
+      <button type="submit" class="primary">✨ עצב לי את החדר</button>
+    </form>
+
+    <!-- ===== תוצאות ===== -->
+    <section id="results" class="results" hidden>
+      <div class="panel">
+        <div class="result-head">
+          <div>
+            <h2 id="resTitle"></h2>
+            <p id="resSummary" class="muted"></p>
+          </div>
+          <button type="button" id="printBtn" class="ghost">🖨️ הדפסה / PDF</button>
+        </div>
+        <div id="stats" class="stats"></div>
+      </div>
+
+      <div class="panel" id="photoPanel" hidden>
+        <h3>החדר שלכם — לפני ואחרי (הדמיית צבע)</h3>
+        <div class="compare">
+          <figure><canvas id="beforeCanvas"></canvas><figcaption>היום</figcaption></figure>
+          <figure><canvas id="afterCanvas"></canvas><figcaption id="afterCaption">בסגנון החדש</figcaption></figure>
+        </div>
+        <div id="photoInsights" class="insights"></div>
+      </div>
+
+      <div class="panel" id="aiPanel" hidden>
+        <h3>🤖 ניתוח Claude לתמונה</h3>
+        <div id="aiContent"></div>
+      </div>
+
+      <div class="panel">
+        <h3>פלטת צבעים</h3>
+        <div id="palette" class="palette"></div>
+      </div>
+
+      <div class="panel">
+        <h3>תוכנית העמדה (מבט על)</h3>
+        <div id="floorplan" class="floorplan"></div>
+        <p class="muted small">הקנה-מידה מדויק לפי המידות שהזנתם. גררו פריט כדי להזיז אותו.</p>
+      </div>
+
+      <div class="two-col">
+        <div class="panel">
+          <h3>רשימת רהיטים וקניות</h3>
+          <table class="items">
+            <thead><tr><th>פריט</th><th>מידות (ס"מ)</th><th>המלצה</th><th>מחיר משוער</th></tr></thead>
+            <tbody id="itemsBody"></tbody>
+            <tfoot><tr><td colspan="3">סה"כ משוער</td><td id="total"></td></tr></tfoot>
+          </table>
+          <p id="skipped" class="muted small"></p>
+        </div>
+        <div class="panel">
+          <h3>חומרים, תאורה ואקססוריז</h3>
+          <div id="details"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>טיפים מותאמים לחדר שלכם</h3>
+        <ul id="tips" class="tips"></ul>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot muted small">כל המחירים משוערים בש"ח ולצורכי תכנון בלבד.</footer>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
