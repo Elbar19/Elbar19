@@ -1,10 +1,11 @@
 import { STYLES, ROOMS, ITEM_COLORS } from './data.js';
 import { planLayout, buildOpenings } from './layout.js';
 import { loadImage, analyzePhoto, drawBefore, drawStyled, imageToBase64Jpeg } from './photo.js';
+import { fitBudget, priceAt, tierName, BUDGET_PRESETS } from './pricing.js';
+import { render3D } from './render3d.js';
+import { initChat } from './chat.js';
 
 const $ = (id) => document.getElementById(id);
-const BUDGET_IDX = { low: 0, mid: 1, high: 2 };
-const BUDGET_NAME = { low: 'חסכוני', mid: 'בינוני', high: 'פרימיום' };
 const ICONS = { sofa: '🛋️', bed: '🛏️', chair: '🪑', table: '▭', storage: '🗄️', desk: '💻', soft: '', light: '💡', plant: '🪴' };
 const fmt = (n) => '₪' + Math.round(n).toLocaleString('he-IL');
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -12,6 +13,8 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&
 const PAD = 40;
 let selectedStyle = 'scandinavian';
 let photoImg = null;
+let photoB64 = null;
+let current = null; // העיצוב האחרון שהופק
 
 // ---------- אתחול טופס ----------
 for (const [key, r] of Object.entries(ROOMS)) {
@@ -33,12 +36,44 @@ $('styleGrid').addEventListener('click', (e) => {
   renderStyleCards();
 });
 
-try { if ($('apiKey')) $('apiKey').value = localStorage.getItem('anthropicKey') || ''; } catch { /* אחסון חסום */ }
+// ---------- מפתח API (משותף לטופס ולצ'אט) ----------
+function getApiKey() {
+  return ($('apiKey')?.value || $('chatKey')?.value || '').trim();
+}
+function setApiKey(key) {
+  if ($('apiKey')) $('apiKey').value = key;
+  if ($('chatKey')) $('chatKey').value = key;
+  try { if (key) localStorage.setItem('anthropicKey', key); } catch { /* אחסון חסום */ }
+}
+try { setApiKey(localStorage.getItem('anthropicKey') || ''); } catch { /* אחסון חסום */ }
+$('apiKey')?.addEventListener('change', () => setApiKey($('apiKey').value.trim()));
+
+// ---------- טווח מחיר ----------
+$('budgetPresets').innerHTML = BUDGET_PRESETS.map((b, i) =>
+  `<button type="button" class="preset" data-i="${i}">${b.label}</button>`).join('');
+function markPreset() {
+  const min = +$('budgetMin').value, max = +$('budgetMax').value;
+  document.querySelectorAll('.preset').forEach((el) => {
+    const b = BUDGET_PRESETS[+el.dataset.i];
+    el.setAttribute('aria-pressed', String(b.min === min && b.max === max));
+  });
+}
+$('budgetPresets').addEventListener('click', (e) => {
+  const el = e.target.closest('.preset');
+  if (!el) return;
+  const b = BUDGET_PRESETS[+el.dataset.i];
+  $('budgetMin').value = b.min; $('budgetMax').value = b.max;
+  markPreset();
+});
+$('budgetMin').addEventListener('input', markPreset);
+$('budgetMax').addEventListener('input', markPreset);
+markPreset();
 
 // ---------- העלאת תמונה ----------
 async function setPhoto(file) {
   if (!file || !file.type.startsWith('image/')) return;
   photoImg = await loadImage(file);
+  photoB64 = null;
   $('photoPreview').src = photoImg.src;
   $('photoPreview').hidden = false;
   $('dropText').hidden = true;
@@ -55,34 +90,149 @@ dz.addEventListener('drop', (e) => {
 $('printBtn')?.addEventListener('click', () => window.print());
 
 // ---------- הפקת עיצוב ----------
+function readForm() {
+  let min = Math.max(0, +$('budgetMin').value || 0), max = Math.max(0, +$('budgetMax').value || 0);
+  if (min > max) [min, max] = [max, min];
+  if (max === 0) max = 30000;
+  return {
+    room: {
+      length: +$('length').value, width: +$('width').value, height: +$('height').value,
+      type: $('roomType').value,
+      doorWall: $('doorWall').value, windowWall: $('windowWall').value,
+    },
+    styleKey: selectedStyle,
+    budgetMin: min, budgetMax: max,
+  };
+}
+
 $('roomForm').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const room = {
-    length: +$('length').value, width: +$('width').value, height: +$('height').value,
-    type: $('roomType').value,
-    doorWall: $('doorWall').value, windowWall: $('windowWall').value,
-    budget: document.querySelector('input[name=budget]:checked').value,
-  };
-  const style = STYLES[selectedStyle];
+  if (!$('roomForm').reportValidity()) return;
+  runDesign(readForm());
+  showResults();
+  await maybeRunAi();
+});
+
+function showResults() {
+  $('results').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// מפיק את העיצוב ומציג אותו. משמש גם את הטופס וגם את נציגת ה-AI.
+function runDesign({ room, styleKey, budgetMin, budgetMax, clientSummary = '' }) {
+  selectedStyle = styleKey;
+  const style = STYLES[styleKey];
   const roomDef = ROOMS[room.type];
   const W = Math.round(room.length * 100), H = Math.round(room.width * 100);
 
   const openings = buildOpenings(W, H, room.doorWall, room.windowWall);
   const plan = planLayout({ W, H }, roomDef.items, openings);
+  const pricing = priceDesign(plan, style, room, budgetMin, budgetMax);
   const photo = photoImg ? analyzePhoto(photoImg) : null;
 
+  current = { room, style, styleKey, roomDef, plan, openings, W, H, pricing, budgetMin, budgetMax, clientSummary };
+
   $('results').hidden = false;
+  $('drawFigure').hidden = true;
+  $('drawStatus').textContent = '';
   renderHeader(room, style, roomDef, plan);
+  renderBudget(pricing, budgetMin, budgetMax);
+  $('clientSummary').hidden = !clientSummary;
+  $('clientSummary').textContent = clientSummary;
   renderPhoto(photo, style);
   renderPalette(style, photo);
   renderFloorplan(W, H, plan, openings, style);
-  renderItems(plan, style, room);
+  draw3D();
+  renderItems(pricing);
   renderDetails(style);
-  renderTips(room, style, plan, photo, openings);
-  $('results').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  renderTips(room, style, plan, photo, openings, pricing);
+  $('aiPanel').hidden = true;
 
-  await maybeRunAi(room, style, roomDef);
-});
+  return {
+    room_type: roomDef.name,
+    style: style.name,
+    placed_items: pricing.rows.filter((r) => r.item).map((r) => `${r.name} (${r.dims} ס"מ, ${fmt(r.price)})`),
+    did_not_fit: plan.skipped.map((s) => s.name),
+    removed_for_budget: pricing.removed,
+    finish_level: tierName(pricing.t),
+    estimated_total_ils: Math.round(pricing.total),
+    budget_range_ils: [budgetMin, budgetMax],
+    budget_status: pricing.status,
+    free_floor_percent: plan.freePct,
+    palette: style.colors.map((c) => `${c.role}: ${c.name} ${c.hex}`),
+  };
+}
+
+// בונה את שורות רשימת הקניות ומתאים את רמת הגימור לטווח המחיר.
+// אם גם הגרסה הזולה ביותר יקרה מדי, מוותרים על פריטים לא הכרחיים (מהפחות חשוב).
+function priceDesign(plan, style, room, min, max) {
+  const paintL = Math.ceil((2 * (room.length + room.width) * room.height - 3) / 10 * 1.1);
+  const extras = [
+    { name: `צבע לקירות (${paintL} ל')`, dims: '—', hint: `${style.colors[0].name} ${style.colors[0].hex}`, price: [35 * paintL, 60 * paintL, 110 * paintL], qty: 1 },
+    { name: 'גופי תאורה', dims: '—', hint: style.lighting[0], price: [400, 1200, 4000], qty: 1 },
+    { name: 'טקסטיל ואקססוריז', dims: '—', hint: style.decor.slice(0, 2).join(', '), price: [400, 1200, 3500], qty: 1 },
+  ];
+
+  const buildLines = () => {
+    const lines = [];
+    const seen = new Set();
+    for (const p of plan.placed) {
+      const key = p.group || p.id;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const qty = p.group ? plan.placed.filter((q) => q.group === p.group).length : 1;
+      const mult = p.compact ? 0.8 : 1;
+      lines.push({
+        item: key, prio: p.prio,
+        name: p.group ? `${p.name} ×${qty}` : p.name,
+        dims: `${p.w}×${p.d}`,
+        hint: style.hints[p.cat] || (p.cat === 'light' ? style.lighting[1] : style.materials[0]),
+        price: p.price.map((v) => v * mult), qty,
+      });
+    }
+    return lines.concat(extras);
+  };
+
+  const removed = [];
+  let lines = buildLines();
+  let fit = fitBudget(lines, min, max);
+  while (fit.status === 'over') {
+    const optional = lines.filter((l) => l.item && l.prio >= 4).sort((a, b) => b.prio - a.prio)[0];
+    if (!optional) break;
+    removed.push(optional.name);
+    plan.placed = plan.placed.filter((p) => (p.group || p.id) !== optional.item);
+    lines = buildLines();
+    fit = fitBudget(lines, min, max);
+  }
+  const rows = lines.map((l) => ({ ...l, price: priceAt(l.price, fit.t) * l.qty }));
+  return { rows, total: fit.total, t: fit.t, status: fit.status, removed };
+}
+
+function renderBudget(pricing, min, max) {
+  const el = $('budgetStatus');
+  const range = `${fmt(min)}–${fmt(max)}`;
+  const level = `רמת גימור: <b>${tierName(pricing.t)}</b>`;
+  if (pricing.status === 'over') {
+    el.className = 'budget-status warn';
+    el.innerHTML = `⚠️ גם בגרסה החסכונית ביותר העיצוב עולה ${fmt(pricing.total)}, מעל הטווח (${range}). ` +
+      (pricing.removed.length ? `ויתרנו על: ${esc(pricing.removed.join(', '))}. ` : '') +
+      'אפשר להרחיב את התקציב או לשמור רהיטים קיימים.';
+  } else if (pricing.status === 'under') {
+    el.className = 'budget-status ok';
+    el.innerHTML = `✓ ${level}. גם ברמה הגבוהה ביותר העיצוב עולה ${fmt(pricing.total)}, מתחת לטווח (${range}). נשאר לכם מקום לפריטי אמנות או לרהיטים בהזמנה אישית.`;
+  } else {
+    el.className = 'budget-status ok';
+    el.innerHTML = `✓ ${level} · סה"כ משוער ${fmt(pricing.total)}, בתוך הטווח ${range}` +
+      (pricing.removed.length ? ` (ויתרנו על: ${esc(pricing.removed.join(', '))})` : '');
+  }
+}
+
+function draw3D() {
+  if (!current) return;
+  const { W, H, room, plan, openings, style } = current;
+  render3D($('view3d'), { W, H, Hc: Math.round(room.height * 100), plan, openings, style, itemFill: (p) => itemFill(style, p) });
+}
+let resizeTimer;
+window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(draw3D, 150); });
 
 function renderHeader(room, style, roomDef, plan) {
   const area = room.length * room.width;
@@ -142,8 +292,8 @@ function renderFloorplan(W, H, plan, openings, style) {
     const L = end - start;
     if (wall === 'top') return `<rect x="${pad + start}" y="${pad - thick}" width="${L}" height="${thick}" style="fill:${color}"/>`;
     if (wall === 'bottom') return `<rect x="${pad + start}" y="${pad + H}" width="${L}" height="${thick}" style="fill:${color}"/>`;
-    if (wall === 'left') return `<rect x="${pad - thick}" y="${pad + start}" width="${thick}" height="${L}" fill="${color}"/>`;
-    return `<rect x="${pad + W}" y="${pad + start}" width="${thick}" height="${L}" fill="${color}"/>`;
+    if (wall === 'left') return `<rect x="${pad - thick}" y="${pad + start}" width="${thick}" height="${L}" style="fill:${color}"/>`;
+    return `<rect x="${pad + W}" y="${pad + start}" width="${thick}" height="${L}" style="fill:${color}"/>`;
   };
 
   // קשת פתיחת הדלת
@@ -243,7 +393,7 @@ function enableDrag(svg, items, W, H) {
     drag.g.setAttribute('transform', `translate(${PAD + drag.ox},${PAD + drag.oy})`);
   });
   const end = () => {
-    if (drag) { drag.it.dx = drag.ox; drag.it.dy = drag.oy; }
+    if (drag) { drag.it.dx = drag.ox; drag.it.dy = drag.oy; draw3D(); }
     drag = null;
   };
   svg.addEventListener('pointerup', end);
@@ -251,38 +401,11 @@ function enableDrag(svg, items, W, H) {
 }
 
 // ---------- רשימת פריטים ----------
-function renderItems(plan, style, room) {
-  const bi = BUDGET_IDX[room.budget];
-  const rows = [];
-  let total = 0;
-  const seen = new Set();
-  for (const p of plan.placed) {
-    if (p.group) {
-      if (seen.has(p.group)) continue;
-      seen.add(p.group);
-      const count = plan.placed.filter((q) => q.group === p.group).length;
-      const price = p.price[bi] * count;
-      total += price;
-      rows.push(`<tr><td>${esc(p.name)} ×${count}</td><td>${p.w}×${p.d}</td><td>${esc(style.hints[p.cat] || '')}</td><td>${fmt(price)}</td></tr>`);
-      continue;
-    }
-    const price = p.price[bi] * (p.compact ? 0.8 : 1);
-    total += price;
-    const hint = style.hints[p.cat] || (p.cat === 'light' ? style.lighting[1] : style.materials[0]);
-    rows.push(`<tr><td>${esc(p.name)}</td><td>${p.w}×${p.d}</td><td>${esc(hint)}</td><td>${fmt(price)}</td></tr>`);
-  }
-  // צבע ותאורה כלליים
-  const paintL = Math.ceil((2 * (room.length + room.width) * room.height - 3) / 10 * 1.1);
-  const paint = paintL * [35, 60, 110][bi];
-  const lights = [400, 1200, 4000][bi];
-  const decor = [400, 1200, 3500][bi];
-  total += paint + lights + decor;
-  rows.push(`<tr><td>צבע לקירות (${paintL} ל')</td><td>—</td><td>${esc(style.colors[0].name)} ${style.colors[0].hex}</td><td>${fmt(paint)}</td></tr>`);
-  rows.push(`<tr><td>גופי תאורה</td><td>—</td><td>${esc(style.lighting[0])}</td><td>${fmt(lights)}</td></tr>`);
-  rows.push(`<tr><td>טקסטיל ואקססוריז</td><td>—</td><td>${esc(style.decor.slice(0, 2).join(', '))}</td><td>${fmt(decor)}</td></tr>`);
-
-  $('itemsBody').innerHTML = rows.join('');
-  $('total').textContent = fmt(total);
+function renderItems(pricing) {
+  $('itemsBody').innerHTML = pricing.rows.map((r) =>
+    `<tr><td>${esc(r.name)}</td><td>${r.dims}</td><td>${esc(r.hint)}</td><td>${fmt(r.price)}</td></tr>`).join('');
+  $('total').textContent = fmt(pricing.total);
+  const plan = current.plan;
   $('skipped').textContent = plan.skipped.length
     ? `לא נכנסו בחדר בלי לחסום מעברים: ${plan.skipped.map((s) => s.name).join(', ')}.`
     : '';
@@ -297,7 +420,7 @@ function renderDetails(style) {
 }
 
 // ---------- טיפים לפי מידות ותמונה ----------
-function renderTips(room, style, plan, photo, openings) {
+function renderTips(room, style, plan, photo, openings, pricing) {
   const tips = [];
   const area = room.length * room.width;
   const ratio = Math.max(room.length, room.width) / Math.min(room.length, room.width);
@@ -322,29 +445,37 @@ function renderTips(room, style, plan, photo, openings) {
     if (photo.satLabel === 'צבעוני' && selectedStyle === 'minimalist')
       tips.push('יש היום הרבה צבעים בחדר — מינימליזם מתחיל מצמצום: הוציאו חפצים צבעוניים והשאירו 2–3 גוונים בלבד.');
   }
+  if (pricing.status === 'over') tips.push('התקציב צפוף: התחילו מהפריטים החשובים (ספה / מיטה, תאורה וצבע), וחפשו יד שנייה לפריטי עץ ומתכת שמחזיקים מעמד.');
   tips.push(`כלל ה-60/30/10: כ-60% ${style.colors[0].name}, 30% ${style.colors[2].name}, ו-10% ${style.colors[3].name} כצבע הדגשה.`);
   $('tips').innerHTML = tips.map((t) => `<li>${esc(t)}</li>`).join('');
 }
 
 // ---------- Claude (אופציונלי) ----------
-async function maybeRunAi(room, style, roomDef) {
-  const key = $('apiKey')?.value.trim() || '';
+function getPhotoB64() {
+  if (!photoImg) return null;
+  if (!photoB64) photoB64 = imageToBase64Jpeg(photoImg);
+  return photoB64;
+}
+const budgetText = () => `${fmt(current.budgetMin)}–${fmt(current.budgetMax)}`;
+
+async function maybeRunAi() {
+  const key = getApiKey();
   const use = !!$('useAi')?.checked;
-  if (!use) { $('aiPanel').hidden = true; return; }
+  if (!use || !current) { $('aiPanel').hidden = true; return; }
   $('aiPanel').hidden = false;
   if (!key) { $('aiContent').innerHTML = '<p class="err">כדי להשתמש בניתוח AI יש להזין מפתח API.</p>'; return; }
   if (!photoImg) { $('aiContent').innerHTML = '<p class="err">כדי לנתח עם AI יש להעלות תמונה של החדר.</p>'; return; }
-  try { localStorage.setItem('anthropicKey', key); } catch { /* אחסון חסום */ }
+  setApiKey(key);
 
+  const { room, style, roomDef } = current;
   const btn = document.querySelector('#roomForm .primary');
   btn.disabled = true;
   $('aiContent').innerHTML = '<p class="muted">Claude מנתח את התמונה… (עשוי לקחת עד דקה)</p>';
   try {
     const { analyzeWithClaude } = await import('./ai.js');
     const r = await analyzeWithClaude({
-      apiKey: key,
-      imageB64: imageToBase64Jpeg(photoImg),
-      room, styleName: style.name, roomTypeName: roomDef.name, budgetName: BUDGET_NAME[room.budget],
+      apiKey: key, imageB64: getPhotoB64(),
+      room, styleName: style.name, roomTypeName: roomDef.name, budgetText: budgetText(),
     });
     const list = (t, a) => (a?.length ? `<h4>${t}</h4><ul>${a.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : '');
     $('aiContent').innerHTML =
@@ -359,4 +490,78 @@ async function maybeRunAi(room, style, roomDef) {
   } finally {
     btn.disabled = false;
   }
+}
+
+// ---------- ציור החדר עם Claude ----------
+const WALL_HE = { top: 'עליון', bottom: 'תחתון', left: 'שמאלי', right: 'ימני' };
+function designForDrawing() {
+  const { room, style, roomDef, plan, openings, W, H } = current;
+  const seen = new Set();
+  return {
+    room: roomDef.name, style: style.name, style_description: style.blurb,
+    size_cm: { length_x: W, width_y: H, ceiling: Math.round(room.height * 100) },
+    door: { wall: openings.door.wall, from_cm: Math.round(openings.door.start), to_cm: Math.round(openings.door.end) },
+    window: openings.window ? { wall: openings.window.wall, from_cm: Math.round(openings.window.start), to_cm: Math.round(openings.window.end) } : 'none',
+    palette: style.colors.map((c) => ({ role: c.role, name: c.name, hex: c.hex })),
+    materials: style.materials, lighting: style.lighting, decor: style.decor,
+    furniture: plan.placed.filter((p) => {
+      const k = p.group || p.id; if (seen.has(k)) return false; seen.add(k); return true;
+    }).map((p) => ({
+      item: p.name, size_cm: `${p.w}x${p.d}`, against_wall: p.group ? 'around the dining table' : p.wall,
+      x_cm: Math.round(p.rect.x + (p.dx || 0)), y_cm: Math.round(p.rect.y + (p.dy || 0)),
+      look: style.hints[p.cat] || '',
+      count: p.group ? plan.placed.filter((q) => q.group === p.group).length : 1,
+    })),
+  };
+}
+
+$('drawBtn')?.addEventListener('click', async () => {
+  if (!current) return;
+  const key = getApiKey();
+  if (!key) {
+    $('drawStatus').textContent = 'כדי ש-Claude יצייר את החדר צריך מפתח API. פתחו את החלק "Claude" בטופס והדביקו אותו.';
+    document.querySelector('details.ai')?.setAttribute('open', '');
+    return;
+  }
+  const btn = $('drawBtn');
+  btn.disabled = true;
+  $('drawFigure').hidden = true;
+  $('drawStatus').textContent = 'Claude מצייר את החדר… זה יכול לקחת כמה דקות.';
+  try {
+    const { drawRoomWithClaude } = await import('./ai.js');
+    const { svg, caption } = await drawRoomWithClaude({ apiKey: key, imageB64: getPhotoB64(), design: designForDrawing() });
+    const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+    $('drawImg').src = url;
+    $('drawDownload').href = url;
+    $('drawCaption').textContent = caption;
+    $('drawFigure').hidden = false;
+    $('drawStatus').textContent = 'זהו איור שמבוסס על תוכנית העיצוב. הוא לא צילום, ולכן הפרטים בו משוערים.';
+  } catch (err) {
+    $('drawStatus').textContent = `לא הצלחתי לצייר: ${err.message || err}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// ---------- נציגת AI ----------
+const WINDOW_MAP = { opposite_door: 'top', right_of_door: 'right', left_of_door: 'left', same_wall_as_door: 'bottom', none: 'none' };
+if ($('chatPanel')) {
+  initChat({
+    getApiKey, setApiKey,
+    hasPhoto: () => !!photoImg,
+    getPhotoB64,
+    setPhoto,
+    showResults,
+    runDesign: (inp) => {
+      // מעדכנים גם את הטופס, כדי שהמשתמש יוכל להמשיך לשנות ידנית
+      $('roomType').value = inp.room_type;
+      $('length').value = inp.length_m; $('width').value = inp.width_m; $('height').value = inp.height_m;
+      $('doorWall').value = 'bottom'; $('windowWall').value = WINDOW_MAP[inp.window_position];
+      $('budgetMin').value = inp.budget_min; $('budgetMax').value = inp.budget_max;
+      markPreset();
+      selectedStyle = inp.style;
+      renderStyleCards();
+      return runDesign({ ...readForm(), clientSummary: inp.client_summary });
+    },
+  });
 }

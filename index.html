@@ -63,21 +63,26 @@
       <h2>3. סגנון</h2>
       <div id="styleGrid" class="style-grid" role="radiogroup" aria-label="סגנון עיצוב"></div>
 
-      <h2>4. תקציב</h2>
-      <div class="budget" role="radiogroup" aria-label="תקציב">
-        <label><input type="radio" name="budget" value="low" /> חסכוני</label>
-        <label><input type="radio" name="budget" value="mid" checked /> בינוני</label>
-        <label><input type="radio" name="budget" value="high" /> פרימיום</label>
+      <h2>4. טווח מחיר (₪)</h2>
+      <div class="grid2">
+        <label>מינימום
+          <input id="budgetMin" type="number" min="0" step="500" value="15000" inputmode="numeric" />
+        </label>
+        <label>מקסימום
+          <input id="budgetMax" type="number" min="0" step="500" value="30000" inputmode="numeric" />
+        </label>
       </div>
+      <div id="budgetPresets" class="presets" aria-label="טווחים מוכנים"></div>
+      <p class="muted small">התקציב כולל רהיטים, תאורה, צבע וטקסטיל. המחירים יותאמו כדי להיכנס לטווח.</p>
 
       <details class="ai">
-        <summary>🤖 ניתוח תמונה חכם עם Claude (אופציונלי)</summary>
-        <p class="muted">עם מפתח API של Anthropic, Claude יסתכל על התמונה עצמה ויתאים את ההמלצות לחדר האמיתי
-          (רהיטים קיימים, תאורה, חומרים). המפתח נשמר רק בדפדפן שלכם.</p>
+        <summary>🤖 Claude: ניתוח תמונה, ציור החדר ונציגה (אופציונלי)</summary>
+        <p class="muted">עם מפתח API של Anthropic תוכלו לקבל ניתוח של התמונה, ציור של החדר המעוצב,
+          ולדבר עם נציגת AI שמעצבת את החדר בשבילכם. המפתח נשמר רק בדפדפן שלכם.</p>
         <label>מפתח API
-          <input id="apiKey" type="password" placeholder="sk-ant-..." />
+          <input id="apiKey" type="password" placeholder="sk-ant-..." autocomplete="off" />
         </label>
-        <label class="inline"><input id="useAi" type="checkbox" /> השתמש בניתוח AI</label>
+        <label class="inline"><input id="useAi" type="checkbox" /> לנתח גם את התמונה בכל עיצוב</label>
       </details>
 
       <button type="submit" class="primary">✨ עצב לי את החדר</button>
@@ -93,7 +98,24 @@
           </div>
           <button type="button" id="printBtn" class="ghost">🖨️ הדפסה / PDF</button>
         </div>
+        <p id="clientSummary" class="client-summary" hidden></p>
         <div id="stats" class="stats"></div>
+        <p id="budgetStatus" class="budget-status"></p>
+      </div>
+
+      <div class="panel">
+        <h3>הדמיה תלת-ממדית</h3>
+        <canvas id="view3d" class="view3d" aria-label="הדמיה תלת-ממדית של החדר המעוצב"></canvas>
+        <p class="muted small">נבנית ישירות מתוכנית ההעמדה, בצבעי הסגנון. הזיזו פריט בתוכנית למטה וההדמיה תתעדכן.</p>
+        <div id="drawBox" class="draw-box">
+          <button type="button" id="drawBtn" class="secondary">🎨 Claude, צייר לי את החדר</button>
+          <p id="drawStatus" class="muted small"></p>
+          <figure id="drawFigure" hidden>
+            <img id="drawImg" alt="ציור של החדר המעוצב" />
+            <figcaption id="drawCaption"></figcaption>
+            <a id="drawDownload" class="ghost" download="room-design.svg">הורדת הציור</a>
+          </figure>
+        </div>
       </div>
 
       <div class="panel" id="photoPanel" hidden>
@@ -143,6 +165,31 @@
       </div>
     </section>
   </main>
+
+
+  <!-- ===== נציגת AI ===== -->
+  <button type="button" id="chatFab" class="chat-fab" aria-controls="chatPanel" aria-expanded="false">💬 עיצוב בשיחה עם נציגה</button>
+  <section id="chatPanel" class="chat-panel" hidden aria-label="שיחה עם נציגת העיצוב">
+    <header class="chat-head">
+      <div><b>נועה · מעצבת AI</b><small>שואלת, מקשיבה ומעצבת בשבילכם</small></div>
+      <div class="chat-actions">
+        <button type="button" id="chatReset" class="icon-btn" title="שיחה חדשה" aria-label="שיחה חדשה">↺</button>
+        <button type="button" id="chatClose" class="icon-btn" title="סגירה" aria-label="סגירה">✕</button>
+      </div>
+    </header>
+    <div id="chatKeyRow" class="chat-key" hidden>
+      <label>מפתח API של Anthropic
+        <input id="chatKey" type="password" placeholder="sk-ant-..." autocomplete="off" />
+      </label>
+    </div>
+    <div id="chatLog" class="chat-log" aria-live="polite"></div>
+    <p id="chatPhotoNote" class="chat-note" hidden>📷 התמונה של החדר תצורף להודעה הבאה</p>
+    <form id="chatForm" class="chat-form">
+      <label class="attach" title="צירוף תמונה של החדר">📎<input id="chatAttach" type="file" accept="image/*" hidden /></label>
+      <textarea id="chatInput" rows="1" placeholder="כתבו הודעה…" aria-label="הודעה"></textarea>
+      <button type="submit" id="chatSend" class="primary send">שליחה</button>
+    </form>
+  </section>
 
   <footer class="foot muted small">כל המחירים משוערים בש"ח ולצורכי תכנון בלבד.</footer>
 
